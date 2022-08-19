@@ -1,0 +1,69 @@
+---
+title: "Supplemental File 6: Meta-analyses for each immune factor"
+output: pdf_document
+classoption: portrait
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+source(here::here("R/source_all.R"))
+
+# put the meta-analysis objects into the current environment
+source(here::here("R/meta_analysis.R"), encoding = "UTF-8")
+```
+
+\newpage
+
+# Log2-fold difference between pre and post-first sex
+
+This section shows the meta-analyses for each immune factor where the concentrations of at least half of the samples fell above the limit of detection. A different immune factor is shown on each page. 
+
+Each row represents a different study, with the squares indicating the mean and the lines indicating the 95% confidence intervals. Positive numbers indicate higher concentrations post-first sex, while negative numbers indicate higher pre-first sex. The size of the squares is proportional to how heavily the study is weighted in the meta-analysis. 
+
+The center of the diamond and the vertical dotted line indicates the meta-effect as determined by the random effects model. The width of the diamond indicates the 95% confidence interval of the meta-effect. 
+
+TE, treatment effect (log2-pg/mL of the post-first sex minus log2-pg/mL of the pre-first sex samples); seTE, standard error of the treatment effect; 95%-CI, 95% confidence interval around the treatment effect; Weight, the percentage of the meta-estimate contributed by each study.
+
+\newpage
+
+```{r, fig.width = 7.75, fig.height = 8, warning = FALSE, message = FALSE}
+
+concentrations <- get_data() %>% 
+    filter(EligibilityPrimary == "Eligible") %>%
+    mutate(StudyName = "Current study") %>% 
+    bind_rows(ghosh_2018_for_linear_models) %>% 
+    bind_rows(get_jespers_2016() %>% mutate(Studyname = "Jespers-2016")) %>% 
+    # replace above with in detection
+    mutate(Detectable = ifelse(Detectable == "Below", "Below", "In")) %>% 
+    mutate(Color = paste(Sex, ifelse(Detectable == "Below", "Below", "In")))
+
+ms <- meta_analyzed %>% 
+    # get number of studies per analyte
+    mutate(k = map_int(Res, function(x) x$k)) %>% 
+    # select those with > 1 study
+    filter(k > 1)
+
+for(i in 1:nrow(ms)) {
+    print(concentrations %>%
+        filter(Assay == ms$Assay[i]) %>%
+        ggplot(aes(x = Sex, y = log10(Concentration))) +
+        geom_boxplot(outlier.color = NA) +
+        ggbeeswarm::geom_quasirandom(method = "smiley", aes(color = Color), size = pointSize()) +
+        geom_line(aes(group = PatientId), position = ggbeeswarm::position_quasirandom(method = "smiley"),
+            color = "grey50", size = thinLineSize()) +
+        facet_wrap(~StudyName,ncol=1) +
+        xlab(NULL) + theme_pub() +
+        x_axis_all_facets() + y_axis_all_facets() +
+        scale_color_manual(values = c("Pre Below" = "#a6cee3", "Pre In" = "#1f78b4", 
+            "Post Below" = "#b2df8a", "Post In" = "#33a02c"), guide = "none") + 
+        ylab("Concentration (log10, pg/mL)") +
+        ggtitle(ms[i, "Assay"]))
+    
+    meta::forest(ms$Res[i][[1]], fixed = FALSE, sortvar = TE,
+        label.right = "Higher post", label.left = "Higher pre",
+        leftlabs = c(ms$Assay[i], "TE", "seTE"),
+        print.tau2 = FALSE, print.pval.Q = FALSE)
+}
+```
+
+\newpage

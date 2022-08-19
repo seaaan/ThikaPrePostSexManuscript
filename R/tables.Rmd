@@ -1,0 +1,314 @@
+---
+title: "Tables"
+output: html_document
+encoding: UTF8
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+source(here::here("R/source_all.R"))
+
+d <- get_metadata(TRUE)
+```
+
+## Table 1: Demographics of eligible 
+
+```{r, warning = FALSE}
+d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    select(Sex, Age, contains("AtEnrollment"), MenstrualPhase, Pregnant, BirthControl, 
+        YChrom, Psa, Bv, Chlamydia, Hsv1, Hsv2) %>% 
+    gtsummary::tbl_summary(by = "Sex") 
+```
+
+## Table 1: P-Values
+
+Test for difference between pre- and post-first sex sample groups using linear or logistic mixed effects regression.
+
+```{r, warning=FALSE, message = FALSE}
+x <- d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    mutate(PatientId == factor(PatientId))
+
+get_p <- function(mod) {
+    mod %>% 
+        summary() %>% 
+        .$coefficients %>% 
+        .[rownames(.) %in% c("SexPost", "SexPre"), colnames(.) %in% c("Pr(>|t|)", "Pr(>|z|)")]
+}
+
+make_df <- function(model, name) {
+    tibble(Comparison = name, PValue = get_p(model))
+}
+
+bind_rows(
+    make_df(lmerTest::lmer(Age ~ Sex + (1|PatientId), data = x), "Age"), 
+    make_df(lme4::glmer(Hsv1 ~ Sex + (1|PatientId), family = "binomial", data = mutate(x, Sex = relevel(Sex, ref = "Post"))), "Hsv1"), 
+    make_df(lme4::glmer(BvN ~ Sex + (1|PatientId), family = "binomial", data = mutate(x, BvN = factor(ifelse(Bv == "Negative", "-", "Not -")))), "BVNeg"),
+    make_df(lme4::glmer(BvI ~ Sex + (1|PatientId), family = "binomial", data = mutate(x, BvI = factor(ifelse(Bv == "Intermediate", "I", "Not I")))), "BVInt"),
+    make_df(lme4::glmer(BvP ~ Sex + (1|PatientId), family = "binomial", data = mutate(x, BvP = factor(ifelse(Bv == "Positive", "+", "Not +")))), "BVPos"),
+    make_df(lme4::glmer(PhaseL ~ Sex + (1|PatientId), family = "binomial", control=lme4::glmerControl(check.conv.singular = "ignore"), data = mutate(x, PhaseL = factor(ifelse(MenstrualPhase == "Luteal", "L", "Not L")))), "PhaseL"),
+    make_df(lme4::glmer(PhaseF ~ Sex + (1|PatientId), family = "binomial", control=lme4::glmerControl(check.conv.singular = "ignore"), data = mutate(x, PhaseF = factor(ifelse(MenstrualPhase == "Follicular", "Follicular", "Not F")))), "PhaseF"),
+    make_df(lme4::glmer(PhaseO ~ Sex + (1|PatientId), family = "binomial", data = mutate(x, PhaseO = factor(ifelse(MenstrualPhase == "Other", "O", "Not O")))), "PhaseO"), 
+    make_df(lme4::glmer(factor(EducationAtEnrollment) ~ Sex + (1|PatientId), family = "binomial", data = x), "Education"), 
+    make_df(lme4::glmer(factor(RegularIncomeAtEnrollment) ~ Sex + (1|PatientId), family = "binomial", data = x), "Income"), 
+    make_df(lme4::glmer(factor(RuralUrbanAtEnrollment) ~ Sex + (1|PatientId), family = "binomial", data = x), "Rural urban"), 
+    make_df(lme4::glmer(factor(MetalRoofAtEnrollment) ~ Sex + (1|PatientId), family = "binomial", data = x), "Roof"), 
+) %>% 
+    mutate(Rounded = round(PValue, 3)) %>% 
+    pander::pander()
+```
+
+## Sample Exclusion diagram
+
+```{r}
+d %>% 
+    group_by(EligibilityPrimary) %>% 
+    count() %>% 
+    pander::pander() 
+```
+
+## Pre/post-by Ptid
+
+```{r}
+d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    group_by(PatientId) %>% 
+    summarise(Visits = paste(Sex, collapse = " ")) %>% 
+    group_by(Visits) %>% 
+    count() %>% 
+    arrange(desc(n)) %>% 
+    rename(NumberOfParticipants = n) %>% 
+    mutate(NumberOfSamples = NumberOfParticipants * (str_count(Visits, " ") + 1)) %>% 
+    bind_rows(., 
+        mutate(summarise(ungroup(.), 
+            NumberOfParticipants = sum(NumberOfParticipants), NumberOfSamples = sum(NumberOfSamples)), Visits = "Total")) %>% 
+    pander::pander() 
+```
+
+## Days since first sex
+
+These statistics exclude samples that we inferred to be post-sex: 
+
+```{r}
+d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    filter(SexSelfReport == "Post") %>% select(DaysSinceFirstSex) %>% 
+    summarise(n = n(),
+        q25 = quantile(DaysSinceFirstSex, 0.25), 
+        median = median(DaysSinceFirstSex), 
+        q75 = quantile(DaysSinceFirstSex, 0.75)) %>% 
+    pander::pander() 
+```
+
+## Days before first sex 
+
+These statistics include the samples we determined to be pre-first sex
+
+```{r}
+d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    filter(Sex == "Pre") %>% 
+    select(DaysSinceFirstSex) %>% 
+    summarise(n = n(),
+        na = sum(is.na(DaysSinceFirstSex)),
+        q25 = quantile(DaysSinceFirstSex, 0.25, na.rm = TRUE), 
+        median = median(DaysSinceFirstSex, na.rm = TRUE), 
+        q75 = quantile(DaysSinceFirstSex, 0.75, na.rm = TRUE)) %>% 
+    pander::pander() 
+```
+
+## STI and birth control inference 
+
+```{r,warning=FALSE}
+get_metadata(FALSE) %>% 
+    group_by(Sex) %>% 
+    summarise(Chlamydia = sum(str_count(Chlamydia, "Inferred")), 
+        Gonorrhea = sum(str_count(Gonorrhea, "Inferred")), 
+        Trichomonas = sum(str_count(Trichomonas, "Inferred")), 
+        BirthControl = sum(str_count(BirthControl, "Inferred"), na.rm = TRUE)) %>% 
+    pander::pander() 
+
+```
+
+Number of samples inferred negative
+
+## Definition of post-first sex
+
+```{r}
+d %>%
+    filter(EligibilityPrimary == "Eligible") %>% 
+    group_by(SexSelfReport, Sex) %>% 
+    summarise(Samples = n(), Participants = length(unique(PatientId))) %>% 
+    pander::pander() 
+```
+
+
+```{r}
+d %>%
+    filter(EligibilityPrimary == "Eligible", SexSelfReport != Sex) %>% 
+    select(PatientId, VisitMonth, SexSelfReport, Sex, Pregnant, YChrom, Psa, Chlamydia:Hsv2) %>% 
+    arrange(PatientId, VisitMonth) %>% 
+    mutate_all(as.character) %>% 
+    mutate_all(function(x) case_when(x == "Negative" ~ "-", x == "Positive" ~ "+++", TRUE ~ x)) %>% 
+    pander::pander() 
+```
+
+Note that some samples are negative for all the tests. In that case, these samples were categorized as post-first sex because an earlier sample (not included in this sub-study) tested positive.
+
+## Percent detectable 
+
+```{r}
+d <- get_data()
+
+d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    group_by(Assay, Detectable) %>% 
+    count() %>% 
+    group_by(Assay) %>% 
+    mutate(Percent = 100 * n / sum(n)) %>% 
+    select(-n) %>% 
+    spread(Detectable, Percent, fill = 0) %>% 
+    select(Assay, Above, In, Below) %>% 
+    arrange(Below, Above, In) %>% 
+    pander::pander() 
+```
+
+## Adjustment for multiple comparisons
+
+```{r}
+get_models() %>% 
+    filter(Model == "Univariate", ModelOutcome != "pg/mg protein") %>% 
+    select(Assay, p.value, Adjusted, everything()) %>% 
+    pander::pander() 
+```
+
+## Total protein
+
+```{r}
+
+tp <- get_metadata() %>% 
+    mutate(TotalProtein = log2(TotalProtein))
+
+lmerTest::lmer(TotalProtein ~ Sex + (1|PatientId), data = tp) %>% 
+    summary()
+
+```
+
+## Meta-analysis adjustment for multiple comparisons
+
+```{r}
+
+get_metaanalysis() %>% 
+    filter(Study == "Meta") %>% 
+    pander::pander() 
+
+```
+
+## Days since first sex analysis 
+
+Numbers of samples and ptids available for analysis of how concentrations change relative to date of first sex: 
+
+```{r}
+get_data() %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    filter(!is.na(DaysSinceFirstSex), DaysSinceFirstSex != 0) %>% 
+    select(PatientId, SpId, Sex) %>% 
+    unique() %>% 
+    group_by(Sex) %>% 
+    summarise(Ptids = length(unique(PatientId)), Samples = length(unique(SpId)))
+```
+
+Age at first sex by group (count of ptids not of samples because only one age per ptid not per sample): 
+Simple t-test because only one sample per ptid
+
+```{r}
+ # age at first sex
+age_at_first_sex <- get_metadata(remove_inferences = TRUE) %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    filter(!is.na(DaysSinceFirstSex), DaysSinceFirstSex != 0) %>% 
+    group_by(PatientId) %>% 
+    mutate(Category = case_when(all(Sex == "Pre") ~ "only pre", 
+        all(Sex == "Post") ~ "only post", 
+        TRUE ~ "mixed")) %>% 
+    mutate(AgeAtFirstSex = Age - (DaysSinceFirstSex/365)) %>% 
+    group_by(PatientId, Category) %>% 
+    # collapse to one observation per person
+    summarise(AgeAtFirstSex = mean(AgeAtFirstSex)) %>% 
+    filter(Category != "only pre")
+
+age_at_first_sex %>% 
+    group_by(Category) %>% 
+    summarise(median=median(AgeAtFirstSex), mean = mean(AgeAtFirstSex), 
+        Ptids = length(unique(PatientId)), n = n())
+
+t.test(AgeAtFirstSex ~ Category, data = age_at_first_sex) 
+```
+
+How many days after first sex were the post-first sex samples obtained? 
+lmer because multiple samples per ptid for the only-post group
+
+```{r}
+days_since_first_sex <- get_metadata(remove_inferences = TRUE) %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    group_by(PatientId) %>% 
+    mutate(Category = case_when(all(Sex == "Pre") ~ "only pre", 
+        all(Sex == "Post") ~ "only post", 
+        TRUE ~ "fully paired")) %>% 
+    filter(Sex == "Post") %>% 
+    filter(!is.na(DaysSinceFirstSex), DaysSinceFirstSex > 0) %>% 
+    select(PatientId, Category, SpId, DaysSinceFirstSex)
+    
+days_since_first_sex %>%     
+    group_by(Category) %>% 
+    summarise(median=median(DaysSinceFirstSex), mean = mean(DaysSinceFirstSex), 
+        Samples = length(unique(SpId)), Ptids = length(unique(PatientId)), n())
+
+lmerTest::lmer(DaysSinceFirstSex ~ Category + (1|PatientId), data = days_since_first_sex) %>% 
+    summary()
+
+```
+
+Concentration vs days since first sex with spline
+```{r}
+get_models_days_since_first_sex() %>% 
+    pander::pander()
+```
+
+## All immune mediators linear, all logistic 
+
+```{r}
+d <- get_data() %>% 
+    # recode "above" as "in"
+    mutate(Detectable = ifelse(Detectable == "Below", "Below", "In"))
+
+detectability <-  d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    mutate(Detectable = factor(Detectable, levels = c("Below", "In"))) %>% 
+    group_by(Assay) %>% 
+    summarise(Detectable = 100*mean(Detectable == "In"))
+
+all_linear <- d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    mutate(Log2Concentration = log2(Concentration)) %>% 
+    apply_model(univariate_model) %>% 
+    filter(Coefficient == "SexPost") %>% 
+    select(Assay, LinearValue = Value, LinearStdError = Std.Error, LinearPValue = p.value)
+
+all_logistic <- d %>% 
+    filter(EligibilityPrimary == "Eligible") %>% 
+    mutate(Detectable = factor(Detectable, levels = c("Below", "In"))) %>% 
+    # remove 100% detectable
+    group_by(Assay) %>% 
+    filter(mean(Detectable == "In") < 1) %>% 
+    ungroup() %>% 
+    apply_model(univariate_logistic_model, postprocessing = glmer_model_postprocessing) %>% 
+    filter(Coefficient == "SexPost") %>% 
+    select(Assay, LogisticValue = Value, LogisticStdError = Std.Error, LogisticPValue = p.value)
+
+left_join(all_linear, all_logistic, by = "Assay") %>% 
+    left_join(detectability, by = "Assay") %>% 
+    arrange(Detectable) %>% 
+    pander::pander()
+```
+
