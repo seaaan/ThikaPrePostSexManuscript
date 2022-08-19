@@ -32,7 +32,7 @@ reproduce the analysis, source `make_paper.R`. This will run code to:
 
 It will take a while to run.
 
-Questions? <smhughes@uw.edu>
+Questions? Open an issue! 
 
 ## File and directory summary
 
